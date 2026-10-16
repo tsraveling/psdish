@@ -1,0 +1,52 @@
+fixture.psd  1968x2086
+ 1   on  group        head
+ 2   off group          eyellids
+ 3   on  layer            eyelid_L
+ 4   on  layer            eyelid down_L
+ 5   on  layer            eyelid_R
+ 6   on  layer            eyelid down_R
+ 7   on  group          Eyes
+ 8   off group            Brlink UP
+ 9   on  layer              Blink up_L
+10   on  layer              Blink up_R
+11   off group            Brlink down
+12   on  layer              Blink down_L
+13   on  layer              Blink down_R
+14   on  group            open
+15   on  group              eye 1
+16   on  layer                Pupil_R
+17   on  layer                Eye_R
+18   on  group              eye 2
+19   on  layer                pupil _L
+20   on  layer                Eye_L
+21   on  layer          Nose
+22   on  group          Mouths
+23   off layer            AI
+24   off layer            O
+25   off layer            E
+26   off layer            U
+27   off layer            ETC
+28   off layer            L
+29   off layer            WQ
+30   on  layer            MBP
+31   off layer            FV
+32   off layer            Neutral
+33   off layer            AI 2
+34   off layer            Smile Open
+35   off layer            Big Smile
+36   off layer            Open Mouth
+37   on  layer          head
+38   on  layer          ear 1
+39   on  layer          ear 2
+40   on  group        Body
+41   on  layer          Hand_R
+42   on  layer          Arm_R
+43   on  layer          Scarf
+44   on  layer          scarf bottom
+45   on  layer          button
+46   on  layer          jacket
+47   on  layer          Leg_R
+48   on  layer          Leg_L
+49   on  layer          Hand_L
+50   on  layer          arm_L
+51   on  layer        Tail

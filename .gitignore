@@ -1,0 +1,5 @@
+psdish
+test/
+.DS_Store
+dist/
+coverage.out
