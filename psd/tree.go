@@ -20,8 +20,13 @@ type Node struct {
 
 func (n *Node) IsGroup() bool { return n.End != nil }
 func (n *Node) IsRoot() bool  { return n.Parent == nil }
-func (n *Node) Name() string  { return n.Rec.Name() }
-func (n *Node) Hidden() bool  { return n.Rec.Hidden() }
+
+// unmatched end divider; must stay top level or it closes its parent on reload.
+func (n *Node) orphanDivider() bool {
+	return !n.IsGroup() && n.Rec != nil && n.Rec.SectionType() == SectionEnd
+}
+func (n *Node) Name() string { return n.Rec.Name() }
+func (n *Node) Hidden() bool { return n.Rec.Hidden() }
 
 // true when the file stored this group as open in Photoshop's layer panel.
 func (n *Node) FileOpen() bool { return n.Rec.SectionType() != SectionClosed }
@@ -109,6 +114,7 @@ type Doc struct {
 	redo     []*Node
 	saved    *Node // snapshot at last save
 	backedUp map[string]bool
+	edited   bool
 
 	hasGroupInfo    bool // resource 1026 matched layer count at load
 	hasGroupEnabled bool // resource 1072 matched layer count at load
@@ -318,6 +324,9 @@ func (d *Doc) Outdent(n *Node) bool {
 
 // moves n into parent at index (index counted before n is removed).
 func (d *Doc) MoveTo(n, parent *Node, index int) bool {
+	if n.orphanDivider() && !parent.IsRoot() {
+		return false
+	}
 	if n.IsRoot() || parent == n || parent.HasAncestor(n) || (!parent.IsGroup() && !parent.IsRoot()) {
 		return false
 	}
@@ -341,7 +350,7 @@ func (d *Doc) MoveTo(n, parent *Node, index int) bool {
 
 // wraps n in a new group named name; returns the group.
 func (d *Doc) Wrap(n *Node, name string) *Node {
-	if n.IsRoot() || name == "" {
+	if n.IsRoot() || name == "" || n.orphanDivider() {
 		return nil
 	}
 	d.checkpoint()
@@ -572,5 +581,10 @@ func (d *Doc) Save(backup bool) error { return d.SaveAs(d.Path, backup) }
 
 // read-only copy safe to use from another goroutine while d keeps changing.
 func (d *Doc) Snapshot() *Doc {
-	return &Doc{Path: d.Path, File: d.File, Root: d.Root.clone(nil)}
+	return &Doc{Path: d.Path, File: d.File, Root: d.Root.clone(nil), edited: d.Edited()}
+}
+
+// true once any edit was made this session, even if undone or saved.
+func (d *Doc) Edited() bool {
+	return d.edited || len(d.undo) > 0 || len(d.redo) > 0
 }

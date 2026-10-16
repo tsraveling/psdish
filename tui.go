@@ -139,7 +139,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.preview.cellW, m.preview.cellH = cellSize(m.preview.out.f)
 		}
 	case previewTickMsg:
-		cmd = m.preview.start(msg, m.doc.Snapshot())
+		cmd = m.preview.start(msg, m.doc)
 	case previewDoneMsg:
 		cmd = m.handlePreviewDone(msg.content)
 	case previewDeleteMsg:
@@ -312,7 +312,7 @@ func (m *model) quit() tea.Cmd {
 }
 
 func (m *model) setStatus(s string, isErr bool) {
-	m.status, m.isErr = s, isErr
+	m.status, m.isErr = displayName(s), isErr
 }
 
 // @region tui:modals -- PROMPT + CONFIRM
@@ -574,7 +574,7 @@ func (m *model) viewRow(n *psd.Node, selected bool, w int) string {
 		vis = m.glyphs.hidden
 	}
 	collapsed := m.collapsed[n.ID]
-	text := vis + " " + strings.Repeat("  ", n.Depth()) + m.glyphs.icon(n, collapsed) + " " + n.Name()
+	text := vis + " " + strings.Repeat("  ", n.Depth()) + m.glyphs.icon(n, collapsed) + " " + displayName(n.Name())
 	s := base.Render(text)
 	if n.IsGroup() && collapsed {
 		s += base.Foreground(dimColor).Render(fmt.Sprintf(" (%d)", n.DescendantCount()))

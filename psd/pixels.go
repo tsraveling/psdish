@@ -11,6 +11,19 @@ import (
 
 // @region psd:decode -- CHANNEL DECODING
 
+// caps on decoded image sizes.
+const (
+	maxDim    = 1 << 18
+	maxPixels = 1 << 30
+)
+
+func checkSize(w, h int) error {
+	if w > maxDim || h > maxDim || w*h > maxPixels {
+		return fmt.Errorf("%dx%d exceeds size limit", w, h)
+	}
+	return nil
+}
+
 // decodes one channel plane of w*h bytes.
 func decodePlane(data []byte, w, h int) ([]byte, error) {
 	if len(data) < 2 {
@@ -21,6 +34,9 @@ func decodePlane(data []byte, w, h int) ([]byte, error) {
 }
 
 func decodeBody(comp uint16, body []byte, w, h int) ([]byte, error) {
+	if err := checkSize(w, h); err != nil {
+		return nil, err
+	}
 	n := w * h
 	switch comp {
 	case 0:
@@ -124,6 +140,14 @@ func (f *File) LayerImage(r *Record) (*image.NRGBA, error) {
 		return nil, nil
 	}
 	w, h := b.Dx(), b.Dy()
+	if err := checkSize(w, h); err != nil {
+		return nil, err
+	}
+	gray := f.Header.Mode == ModeGrayscale
+	colorPlanes := int16(3)
+	if gray {
+		colorPlanes = 1
+	}
 	planes := map[int16][]byte{}
 	var mask []byte
 	mi, hasMask := r.maskInfo()
@@ -138,7 +162,7 @@ func (f *File) LayerImage(r *Record) (*image.NRGBA, error) {
 			}
 			continue
 		}
-		if ch.ID < -1 {
+		if ch.ID < -1 || ch.ID >= colorPlanes {
 			continue
 		}
 		p, err := decodePlane(ch.Data, w, h)
@@ -148,7 +172,6 @@ func (f *File) LayerImage(r *Record) (*image.NRGBA, error) {
 		planes[ch.ID] = p
 	}
 	img := image.NewNRGBA(b)
-	gray := f.Header.Mode == ModeGrayscale
 	for i := range w * h {
 		o := i * 4
 		if gray {
@@ -190,12 +213,28 @@ func (f *File) CompositeImage() (*image.NRGBA, error) {
 	}
 	w, h := int(f.Header.Width), int(f.Header.Height)
 	nc := int(f.Header.Channels)
+	gray := f.Header.Mode == ModeGrayscale
+	colorPlanes := 3
+	if gray {
+		colorPlanes = 1
+	}
+	if nc < colorPlanes {
+		return nil, fmt.Errorf("composite has %d channels, need %d", nc, colorPlanes)
+	}
+	if err := checkSize(w, h); err != nil {
+		return nil, err
+	}
+	// in layered files, extra channels are saved selections unless flagged as merged transparency
+	need := colorPlanes
+	if nc > colorPlanes && f.MergedAlpha {
+		need++
+	}
 	comp := binary.BigEndian.Uint16(f.Composite)
 	body := f.Composite[2:]
-	planes := make([][]byte, nc)
+	planes := make([][]byte, need)
 	switch comp {
 	case 0:
-		for c := range nc {
+		for c := range need {
 			if len(body) < (c+1)*w*h {
 				return nil, fmt.Errorf("composite short")
 			}
@@ -206,7 +245,7 @@ func (f *File) CompositeImage() (*image.NRGBA, error) {
 			return nil, fmt.Errorf("composite rle short")
 		}
 		p := 2 * h * nc
-		for c := range nc {
+		for c := range need {
 			out := make([]byte, 0, w*h)
 			for row := range h {
 				rl := int(binary.BigEndian.Uint16(body[2*(c*h+row):]))
@@ -222,13 +261,8 @@ func (f *File) CompositeImage() (*image.NRGBA, error) {
 		return nil, fmt.Errorf("unsupported composite compression %d", comp)
 	}
 	img := image.NewNRGBA(image.Rect(0, 0, w, h))
-	gray := f.Header.Mode == ModeGrayscale
-	colorPlanes := 3
-	if gray {
-		colorPlanes = 1
-	}
 	var alpha []byte
-	if nc > colorPlanes {
+	if need > colorPlanes {
 		alpha = planes[colorPlanes]
 	}
 	for i := range w * h {
@@ -241,7 +275,7 @@ func (f *File) CompositeImage() (*image.NRGBA, error) {
 		}
 		img.Pix[o+3] = at(alpha, i, 255)
 	}
-	if alpha != nil && f.MergedAlpha {
+	if alpha != nil {
 		unmatte(img)
 	}
 	return img, nil
@@ -294,16 +328,8 @@ func (d *Doc) Render(n *Node) (*image.NRGBA, error) {
 	}
 
 	var bounds image.Rectangle
-	imgs := make([]*image.NRGBA, len(layers))
-	for i, l := range layers {
-		img, err := d.File.LayerImage(l.Rec)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", l.Name(), err)
-		}
-		if img != nil {
-			imgs[i] = img
-			bounds = bounds.Union(img.Bounds())
-		}
+	for _, l := range layers {
+		bounds = bounds.Union(l.Rec.Bounds())
 	}
 	if n.IsRoot() {
 		bounds = image.Rect(0, 0, int(d.File.Header.Width), int(d.File.Header.Height))
@@ -311,12 +337,18 @@ func (d *Doc) Render(n *Node) (*image.NRGBA, error) {
 	if bounds.Empty() {
 		return nil, nil
 	}
+	if err := checkSize(bounds.Dx(), bounds.Dy()); err != nil {
+		return nil, err
+	}
 	out := image.NewNRGBA(bounds)
-	for i, img := range imgs {
-		if img == nil {
-			continue
+	for i, l := range layers {
+		img, err := d.File.LayerImage(l.Rec)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", l.Name(), err)
 		}
-		over(out, img, int(opac[i]*255+0.5))
+		if img != nil {
+			over(out, img, int(opac[i]*255+0.5))
+		}
 	}
 	return out, nil
 }
@@ -341,4 +373,15 @@ func over(dst, src *image.NRGBA, opacity int) {
 			dst.Pix[do+3] = byte(oa)
 		}
 	}
+}
+
+// whole-document image prefers the stored composite until the session edits
+// anything (it is stale afterwards); everything else is a naive render.
+func (d *Doc) Image(n *Node) (*image.NRGBA, error) {
+	if n.IsRoot() && !d.Edited() {
+		if img, err := d.File.CompositeImage(); err == nil {
+			return img, nil
+		}
+	}
+	return d.Render(n)
 }

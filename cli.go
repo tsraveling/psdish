@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/tsraveling/psdish/psd"
 )
@@ -189,6 +190,16 @@ func kindName(n *psd.Node) string {
 	return "layer"
 }
 
+// replaces control characters with '?' for terminal output.
+func displayName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '?'
+		}
+		return r
+	}, name)
+}
+
 func writeListing(w io.Writer, d *psd.Doc) {
 	h := d.File.Header
 	fmt.Fprintf(w, "%s  %dx%d\n", filepath.Base(d.Path), h.Width, h.Height)
@@ -214,7 +225,7 @@ func writeListing(w io.Writer, d *psd.Doc) {
 		if len(tags) > 0 {
 			suffix = "  [" + strings.Join(tags, ", ") + "]"
 		}
-		fmt.Fprintf(w, "%*d %s %s %-12s %s%s%s\n", width, i+1, mark, vis, kindName(n), strings.Repeat("  ", n.Depth()), n.Name(), suffix)
+		fmt.Fprintf(w, "%*d %s %s %-12s %s%s%s\n", width, i+1, mark, vis, kindName(n), strings.Repeat("  ", n.Depth()), displayName(n.Name()), suffix)
 	}
 }
 
@@ -277,7 +288,7 @@ func runCLI(o options, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if err := applyOps(d, o, stderr); err != nil {
-		fmt.Fprintln(stderr, "psdish:", err)
+		fmt.Fprintln(stderr, "psdish:", displayName(err.Error()))
 		return 1
 	}
 	if d.Dirty() || (o.out != "" && hasEdits(o)) {
@@ -348,10 +359,8 @@ func applyOps(d *psd.Doc, o options, stderr io.Writer) error {
 		}
 		switch b.kind {
 		case opMove:
-			switch {
-			case b.target == nil:
-				d.MoveTo(n, d.Root, len(d.Root.Children))
-			default:
+			parent, idx := d.Root, len(d.Root.Children)
+			if b.target != nil {
 				t := d.Find(b.target.ID)
 				if t == nil {
 					return fmt.Errorf("move target for %q was deleted by an earlier operation", b.ref)
@@ -359,11 +368,13 @@ func applyOps(d *psd.Doc, o options, stderr io.Writer) error {
 				if t == n || t.HasAncestor(n) {
 					return fmt.Errorf("cannot move %q into itself", b.ref)
 				}
+				parent, idx = t.Parent, t.Index()
 				if b.into {
-					d.MoveTo(n, t, len(t.Children))
-				} else {
-					d.MoveTo(n, t.Parent, t.Index())
+					parent, idx = t, len(t.Children)
 				}
+			}
+			if !d.MoveTo(n, parent, idx) {
+				fmt.Fprintf(stderr, "psdish: --move %s: cannot move there or already in place; skipped\n", b.ref)
 			}
 		case opRename:
 			d.Rename(n, b.arg)
@@ -376,7 +387,9 @@ func applyOps(d *psd.Doc, o options, stderr io.Writer) error {
 		case opDelete:
 			d.Delete(n)
 		case opGroup:
-			d.Wrap(n, b.arg)
+			if d.Wrap(n, b.arg) == nil {
+				fmt.Fprintf(stderr, "psdish: --group %s: cannot be grouped; skipped\n", b.ref)
+			}
 		case opIndent:
 			if !d.Indent(n) {
 				fmt.Fprintf(stderr, "psdish: --indent %s: no group directly above; skipped\n", b.ref)
@@ -409,8 +422,13 @@ func defaultExportName(name string) string {
 }
 
 func sanitizeFilename(name string) string {
-	r := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "\x00", "")
-	s := strings.TrimSpace(r.Replace(name))
+	s := strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == ':' || unicode.IsControl(r) {
+			return '_'
+		}
+		return r
+	}, name)
+	s = strings.TrimSpace(s)
 	if s == "" || s == "." || s == ".." {
 		s = "layer"
 	}
@@ -432,12 +450,16 @@ func exportPNG(d *psd.Doc, n *psd.Node, path string, overwrite bool) error {
 	if _, err := os.Stat(path); err == nil && !overwrite {
 		return fmt.Errorf("%s: %w (use --force to overwrite)", path, errExists)
 	}
-	img, err := d.Render(n)
+	img, err := d.Image(n)
 	if err != nil {
 		return err
 	}
 	if img == nil {
-		return fmt.Errorf("%q has no visible pixels", n.Name())
+		name := filepath.Base(d.Path)
+		if !n.IsRoot() {
+			name = n.Name()
+		}
+		return fmt.Errorf("%q has no visible pixels", name)
 	}
 	f, err := os.Create(path)
 	if err != nil {

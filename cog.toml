@@ -20,6 +20,7 @@ post_package_bump_hooks = []
 [git_hooks]
 
 [commit_types]
+piton = { changelog_title = "Pitons", omit_from_changelog = true, bump_minor = false, bump_patch = false }
 
 [changelog]
 path = "CHANGELOG.md"

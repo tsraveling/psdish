@@ -156,17 +156,20 @@ func (p *previewer) request(k previewKey) tea.Cmd {
 }
 
 // called on tick; starts the render if the request is still current.
-func (p *previewer) start(msg previewTickMsg, snap *psd.Doc) tea.Cmd {
+func (p *previewer) start(msg previewTickMsg, doc *psd.Doc) tea.Cmd {
 	if msg.seq != p.seq {
 		return nil
 	}
+	snap := doc.Snapshot()
 	id := uint32(0)
 	if p.mode == graphicsKitty {
 		id = p.nextID
 		p.nextID++
 	}
+	// copy so the render goroutine never reads fields Update keeps writing
+	pv := *p
 	return func() tea.Msg {
-		return previewDoneMsg{content: p.render(msg.key, snap, id)}
+		return previewDoneMsg{content: pv.render(msg.key, snap, id)}
 	}
 }
 
@@ -178,9 +181,14 @@ func (p *previewer) finish(c *previewContent) tea.Cmd {
 	p.cache = append(p.cache, c)
 	var cmds []tea.Cmd
 	for len(p.cache) > previewCacheSize {
-		old := p.cache[0]
-		p.cache = p.cache[1:]
-		if old.imageID != 0 && old != p.current {
+		// never evict the on-screen image
+		i := 0
+		if p.cache[0] == p.current {
+			i = 1
+		}
+		old := p.cache[i]
+		p.cache = slices.Delete(p.cache, i, i+1)
+		if old.imageID != 0 {
 			cmds = append(cmds, p.deleteLater(old.imageID))
 		}
 	}
@@ -225,17 +233,10 @@ func (p *previewer) render(k previewKey, snap *psd.Doc, id uint32) *previewConte
 	}
 	c.approx = n.ContainsSpecial()
 
-	var img *image.NRGBA
-	var err error
-	if k.target == 0 && k.rev == 0 {
-		img, err = snap.File.CompositeImage()
-	}
-	if img == nil {
-		img, err = snap.Render(n)
-	}
+	img, err := snap.Image(n)
 	switch {
 	case err != nil:
-		c.message = "preview failed: " + err.Error()
+		c.message = "preview failed: " + displayName(err.Error())
 		return c
 	case img == nil:
 		c.message = "nothing visible to preview"

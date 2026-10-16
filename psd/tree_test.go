@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -201,10 +202,11 @@ func TestUndoRedoDirty(t *testing.T) {
 	if byName(d, "A") != nil {
 		t.Fatal("redo failed")
 	}
-	if d.Undo(); d.Redo() && d.Redo() {
-		if !byName(d, "l5").Hidden() {
-			t.Fatal("redo toggle failed")
-		}
+	if !d.Redo() || !byName(d, "l5").Hidden() {
+		t.Fatal("redo toggle failed")
+	}
+	if d.Redo() {
+		t.Fatal("redo stack should be empty")
 	}
 }
 
@@ -288,5 +290,27 @@ func TestFixtureResourcesAndSave(t *testing.T) {
 	}
 	if r := f.resource(1024); int(binary.BigEndian.Uint16(r.Data)) >= n {
 		t.Fatal("1024 out of range")
+	}
+}
+
+func TestOrphanDividerPinnedToTop(t *testing.T) {
+	d := docFrom(t, base)
+	// directly below group C, so Indent has a group to target
+	d.File.Records = slices.Insert(d.File.Records, 1, newDividerRecord(999))
+	d = NewDoc(d.File)
+	var orphan *Node
+	for _, n := range d.Root.Children {
+		if n.orphanDivider() {
+			orphan = n
+		}
+	}
+	if orphan == nil {
+		t.Fatal("orphan not kept")
+	}
+	if d.Indent(orphan) || d.Wrap(orphan, "G") != nil || d.MoveTo(orphan, byName(d, "A"), 0) {
+		t.Fatal("orphan divider must not be nested")
+	}
+	if !d.Shift(orphan, -1) {
+		t.Fatal("orphan should still reorder at top level")
 	}
 }

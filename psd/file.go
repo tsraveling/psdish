@@ -193,12 +193,15 @@ type reader struct {
 	err error
 }
 
+// on error, returns zeros for fixed-size reads (<= 8 bytes) and nil otherwise.
 func (r *reader) take(n int) []byte {
-	if r.err != nil {
-		return make([]byte, n)
-	}
-	if n < 0 || r.pos+n > len(r.b) {
+	if r.err == nil && (n < 0 || r.pos+n > len(r.b)) {
 		r.err = io.ErrUnexpectedEOF
+	}
+	if r.err != nil {
+		if n > 8 {
+			return nil
+		}
 		return make([]byte, max(n, 0))
 	}
 	s := r.b[r.pos : r.pos+n]
@@ -237,6 +240,9 @@ func Parse(b []byte) (*File, error) {
 	if f.Header.Mode != ModeRGB && f.Header.Mode != ModeGrayscale {
 		return nil, fmt.Errorf("%w: color mode %s (only RGB and grayscale supported)", ErrUnsupported, modeName(f.Header.Mode))
 	}
+	if f.Header.Width > 30000 || f.Header.Height > 30000 {
+		return nil, fmt.Errorf("%w: %dx%d exceeds the PSD size limit", ErrUnsupported, f.Header.Width, f.Header.Height)
+	}
 
 	f.ColorData = r.take(int(r.u32()))
 
@@ -247,6 +253,9 @@ func Parse(b []byte) (*File, error) {
 			return nil, fmt.Errorf("bad image resource signature at %d", r.pos-4)
 		}
 		res := Resource{ID: r.u16()}
+		if r.err != nil || r.pos >= len(r.b) {
+			return nil, fmt.Errorf("reading image resources: %w", io.ErrUnexpectedEOF)
+		}
 		nl := int(r.b[r.pos])
 		pl := 1 + nl
 		if pl%2 == 1 {
@@ -288,6 +297,9 @@ func (f *File) parseLayerAndMask(r *reader, lmEnd int) error {
 	liLen := int(r.u32())
 	liStart := r.pos
 	liEnd := liStart + liLen
+	if r.err == nil && liEnd > lmEnd {
+		return fmt.Errorf("layer info overruns layer section")
+	}
 	f.layerPadAlign = 2
 	if liLen > 0 {
 		cnt := int16(r.u16())
@@ -295,24 +307,25 @@ func (f *File) parseLayerAndMask(r *reader, lmEnd int) error {
 			f.MergedAlpha = true
 			cnt = -cnt
 		}
+		var chLens [][]int
 		for range int(cnt) {
 			if r.err != nil {
 				break
 			}
-			rec, chLens := parseRecord(r)
+			rec, lens := parseRecord(r)
 			f.Records = append(f.Records, rec)
-			// stash lengths in channel data until data pass
-			for j := range rec.Channels {
-				rec.Channels[j].Data = make([]byte, 0, chLens[j])
-			}
+			chLens = append(chLens, lens)
 		}
-		for _, rec := range f.Records {
+		for i, rec := range f.Records {
 			for j := range rec.Channels {
-				rec.Channels[j].Data = r.take(cap(rec.Channels[j].Data))
+				rec.Channels[j].Data = r.take(chLens[i][j])
 			}
 		}
 		if r.err != nil {
 			return fmt.Errorf("reading layer records: %w", r.err)
+		}
+		if r.pos > liEnd {
+			return fmt.Errorf("layer records overrun layer info")
 		}
 		if liLen%4 == 0 && (r.pos-liStart)%4 != 0 {
 			f.layerPadAlign = 4
@@ -322,6 +335,9 @@ func (f *File) parseLayerAndMask(r *reader, lmEnd int) error {
 	if r.pos < lmEnd {
 		gm := int(r.u32())
 		f.GlobalMask = r.take(gm)
+		if r.err == nil && r.pos > lmEnd {
+			return fmt.Errorf("global mask overruns layer section")
+		}
 	}
 	if r.err == nil && r.pos <= lmEnd {
 		f.Extra = r.take(lmEnd - r.pos)
