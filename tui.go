@@ -330,6 +330,7 @@ type prompt struct {
 	kind  promptKind
 	title string
 	input textinput.Model
+	orig  string // initial value as the input holds it
 }
 
 type confirmKind int
@@ -354,7 +355,7 @@ func (m *model) openPrompt(kind promptKind, title, value, label string) {
 	in.CursorEnd()
 	in.Focus()
 	in.CharLimit = 255
-	m.prompt = &prompt{kind: kind, title: title, input: in}
+	m.prompt = &prompt{kind: kind, title: title, input: in, orig: in.Value()}
 }
 
 func (m *model) updatePrompt(msg tea.KeyMsg) tea.Cmd {
@@ -365,6 +366,10 @@ func (m *model) updatePrompt(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		p := m.prompt
 		m.prompt = nil
+		// untouched rename keeps the stored name verbatim
+		if p.kind == promptRename && p.input.Value() == p.orig {
+			return nil
+		}
 		return m.submitPrompt(p.kind, strings.TrimSpace(p.input.Value()))
 	}
 	var cmd tea.Cmd

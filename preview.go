@@ -210,9 +210,6 @@ func (p *previewer) cleanup() {
 	for _, c := range p.cache {
 		p.deleteImage(c.imageID)
 	}
-	if p.current != nil && !slices.Contains(p.cache, p.current) {
-		p.deleteImage(p.current.imageID)
-	}
 	p.cache = nil
 }
 
@@ -231,9 +228,8 @@ func (p *previewer) render(k previewKey, snap *psd.Doc, id uint32) *previewConte
 		c.message = fmt.Sprintf("no preview available for %s layers.", s)
 		return c
 	}
-	c.approx = n.ContainsSpecial()
-
-	img, err := snap.Image(n)
+	img, approx, err := snap.ImageApprox(n)
+	c.approx = approx
 	switch {
 	case err != nil:
 		c.message = "preview failed: " + displayName(err.Error())

@@ -375,13 +375,29 @@ func over(dst, src *image.NRGBA, opacity int) {
 	}
 }
 
-// whole-document image prefers the stored composite until the session edits
-// anything (it is stale afterwards); everything else is a naive render.
+// whole-document image prefers the stored composite while it is flagged valid
+// (always, for layerless files) and the session has not edited anything;
+// everything else is a naive render.
 func (d *Doc) Image(n *Node) (*image.NRGBA, error) {
-	if n.IsRoot() && !d.Edited() {
+	img, _, err := d.ImageApprox(n)
+	return img, err
+}
+
+// like Image; approx is true when the result can differ from Photoshop's.
+func (d *Doc) ImageApprox(n *Node) (img *image.NRGBA, approx bool, err error) {
+	if n.IsRoot() && !d.PixelsChanged() && (d.File.CompositeValid() || len(d.File.Records) == 0) {
 		if img, err := d.File.CompositeImage(); err == nil {
-			return img, nil
+			return img, false, nil
 		}
 	}
-	return d.Render(n)
+	img, err = d.Render(n)
+	return img, n.RenderApprox(), err
+}
+
+// false when resource 1057 (version info) says the merged image is not real.
+func (f *File) CompositeValid() bool {
+	if res := f.resource(1057); res != nil && len(res.Data) >= 5 {
+		return res.Data[4] != 0
+	}
+	return true
 }

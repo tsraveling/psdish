@@ -314,3 +314,94 @@ func TestOrphanDividerPinnedToTop(t *testing.T) {
 		t.Fatal("orphan should still reorder at top level")
 	}
 }
+
+func TestSaveMarksCompositeStale(t *testing.T) {
+	b := loadFixture(t)
+	path := t.TempDir() + "/f.psd"
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := Load(path)
+	if !d.File.CompositeValid() {
+		t.Fatal("fixture composite should start valid")
+	}
+	d.ToggleVisible(d.Nodes()[0])
+	if err := d.Save(false); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := Load(path)
+	if again.File.CompositeValid() {
+		t.Fatal("edited save must clear hasRealMergedData")
+	}
+	img, _ := again.Image(again.Root)
+	want, _ := again.Render(again.Root)
+	if !bytes.Equal(img.Pix, want.Pix) {
+		t.Fatal("stale composite used after edited save")
+	}
+}
+
+func TestCompositeStaleOnlyWhenPixelsChange(t *testing.T) {
+	b := loadFixture(t)
+	path := t.TempDir() + "/f.psd"
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := d.Nodes()[0]
+	d.Rename(n, "renamed")
+	d.ToggleVisible(n)
+	d.Undo()
+	if err := d.Save(false); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.File.CompositeValid() {
+		t.Fatal("rename-only save must keep hasRealMergedData")
+	}
+
+	again.File.Resources = slices.DeleteFunc(again.File.Resources, func(r Resource) bool { return r.ID == 1057 })
+	again.ToggleVisible(again.Nodes()[0])
+	if err := again.Save(false); err != nil {
+		t.Fatal(err)
+	}
+	third, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.File.CompositeValid() {
+		t.Fatal("edited save without resource 1057 must add it as stale")
+	}
+}
+
+func TestRevertedSaveRestoresCompositeFlag(t *testing.T) {
+	b := loadFixture(t)
+	path := t.TempDir() + "/f.psd"
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.ToggleVisible(d.Nodes()[0])
+	if err := d.Save(false); err != nil {
+		t.Fatal(err)
+	}
+	d.Undo()
+	if err := d.Save(false); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.File.CompositeValid() {
+		t.Fatal("save reverted to the loaded tree must restore hasRealMergedData")
+	}
+}

@@ -365,7 +365,7 @@ func applyOps(d *psd.Doc, o options, stderr io.Writer) error {
 				if t == nil {
 					return fmt.Errorf("move target for %q was deleted by an earlier operation", b.ref)
 				}
-				if t == n || t.HasAncestor(n) {
+				if t.HasAncestor(n) || (b.into && t == n) {
 					return fmt.Errorf("cannot move %q into itself", b.ref)
 				}
 				parent, idx = t.Parent, t.Index()

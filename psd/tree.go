@@ -113,11 +113,12 @@ type Doc struct {
 	undo     []*Node
 	redo     []*Node
 	saved    *Node // snapshot at last save
+	loaded   *Node // snapshot at load
 	backedUp map[string]bool
-	edited   bool
 
-	hasGroupInfo    bool // resource 1026 matched layer count at load
-	hasGroupEnabled bool // resource 1072 matched layer count at load
+	hasGroupInfo    bool   // resource 1026 matched layer count at load
+	hasGroupEnabled bool   // resource 1072 matched layer count at load
+	loadedVersion   []byte // resource 1057 data at load; nil when absent
 }
 
 func Load(path string) (*Doc, error) {
@@ -153,8 +154,12 @@ func NewDoc(f *File) *Doc {
 			r.groupEnabled = res.Data[i]
 		}
 	}
+	if res := f.resource(1057); res != nil {
+		d.loadedVersion = res.Data
+	}
 	d.Root = d.build(f.Records)
 	d.saved = d.Root.clone(nil)
+	d.loaded = d.saved
 	return d
 }
 
@@ -238,18 +243,19 @@ func (d *Doc) Redo() bool {
 }
 
 func (d *Doc) Dirty() bool {
-	return d.saved == nil || !sameTree(d.Root, d.saved)
+	return d.saved == nil || !sameTree(d.Root, d.saved, true)
 }
 
-func sameTree(a, b *Node) bool {
+// names: also compare layer names (they do not affect pixels).
+func sameTree(a, b *Node, names bool) bool {
 	if a.ID != b.ID || len(a.Children) != len(b.Children) {
 		return false
 	}
-	if a.Rec != nil && (a.Rec.Name() != b.Rec.Name() || a.Rec.Flags != b.Rec.Flags) {
+	if a.Rec != nil && (a.Rec.Flags != b.Rec.Flags || names && a.Rec.Name() != b.Rec.Name()) {
 		return false
 	}
 	for i := range a.Children {
-		if !sameTree(a.Children[i], b.Children[i]) {
+		if !sameTree(a.Children[i], b.Children[i], names) {
 			return false
 		}
 	}
@@ -470,7 +476,48 @@ func (d *Doc) commit() {
 	}
 	emit(d.Root)
 	d.File.Records = recs
+	if sameTree(d.Root, d.loaded, false) {
+		d.restoreVersionInfo()
+	} else {
+		d.markCompositeStale()
+	}
 	d.syncResources(recs)
+}
+
+// clears hasRealMergedData in resource 1057, adding or replacing it if missing or malformed.
+func (d *Doc) markCompositeStale() {
+	f := d.File
+	res := f.resource(1057)
+	switch {
+	case res == nil:
+		f.Resources = append(f.Resources, Resource{ID: 1057, Name: []byte{0, 0}, Data: staleVersionInfo()})
+	case len(res.Data) < 5:
+		res.Data = staleVersionInfo()
+	case res.Data[4] != 0:
+		res.Data = append([]byte(nil), res.Data...)
+		res.Data[4] = 0
+	}
+}
+
+func staleVersionInfo() []byte {
+	data := binary.BigEndian.AppendUint32(nil, 1)
+	data = append(data, 0)
+	data = append(data, encodeLuni("")...) // writer name
+	data = append(data, encodeLuni("")...) // reader name
+	return binary.BigEndian.AppendUint32(data, 1)
+}
+
+// puts resource 1057 back as loaded, undoing an earlier save's markCompositeStale.
+func (d *Doc) restoreVersionInfo() {
+	f := d.File
+	res := f.resource(1057)
+	switch {
+	case res == nil:
+	case d.loadedVersion == nil:
+		f.Resources = slices.DeleteFunc(f.Resources, func(r Resource) bool { return r.ID == 1057 })
+	default:
+		res.Data = d.loadedVersion
+	}
 }
 
 func (d *Doc) syncResources(recs []*Record) {
@@ -581,10 +628,13 @@ func (d *Doc) Save(backup bool) error { return d.SaveAs(d.Path, backup) }
 
 // read-only copy safe to use from another goroutine while d keeps changing.
 func (d *Doc) Snapshot() *Doc {
-	return &Doc{Path: d.Path, File: d.File, Root: d.Root.clone(nil), edited: d.Edited()}
+	// own copy of the resource list: commit rewrites resource data on save
+	f := *d.File
+	f.Resources = slices.Clone(f.Resources)
+	return &Doc{Path: d.Path, File: &f, Root: d.Root.clone(nil), loaded: d.loaded, loadedVersion: d.loadedVersion}
 }
 
-// true once any edit was made this session, even if undone or saved.
-func (d *Doc) Edited() bool {
-	return d.edited || len(d.undo) > 0 || len(d.redo) > 0
+// true when layer order or visibility differs from the file as loaded.
+func (d *Doc) PixelsChanged() bool {
+	return d.loaded != nil && !sameTree(d.Root, d.loaded, false)
 }

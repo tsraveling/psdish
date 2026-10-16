@@ -240,6 +240,9 @@ func Parse(b []byte) (*File, error) {
 	if f.Header.Mode != ModeRGB && f.Header.Mode != ModeGrayscale {
 		return nil, fmt.Errorf("%w: color mode %s (only RGB and grayscale supported)", ErrUnsupported, modeName(f.Header.Mode))
 	}
+	if f.Header.Width == 0 || f.Header.Height == 0 {
+		return nil, fmt.Errorf("invalid canvas size %dx%d", f.Header.Width, f.Header.Height)
+	}
 	if f.Header.Width > 30000 || f.Header.Height > 30000 {
 		return nil, fmt.Errorf("%w: %dx%d exceeds the PSD size limit", ErrUnsupported, f.Header.Width, f.Header.Height)
 	}
